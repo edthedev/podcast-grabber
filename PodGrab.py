@@ -61,6 +61,7 @@ import unicodedata
 import socket
 import errno
 
+today = datetime.date.today()
 
 MODE_NONE = 70
 MODE_SUBSCRIBE = 71
@@ -137,14 +138,58 @@ class PodCasts(object):
         else:
             print "Download directory exists: '" + self.data_dir + "'" 
 
+    def get_subscriptions(self):
+        try:
+            self.cur.execute('SELECT * FROM subscriptions')
+            return self.cur.fetchall()
+        except sqlite3.OperationalError:
+            print "There are no current subscriptions"
+            return [] 
+
+    def subscribe(self, feed_url):
+        """Subscribe to a feed by URL"""
+        channels = self.get_channels(feed_url)
+        for channel in channels:
+
+            channel_title = channel.getElementsByTagName('title')[0].firstChild.data
+            channel_link = channel.getElementsByTagName('link')[0].firstChild.data
+            print "Channel Title: ===" + channel_title + "==="
+            print "Channel Link: " + channel_link
+
+            channel_title = clean_string(channel_title)
+            channel_directory = self._get_channel_directory(channel_title)
+
+            if does_sub_exist(self.cur, self.conn, feed_url):
+                print "Podcast subscription exists - getting latest podcast"
+                last_ep = get_last_subscription_downloaded(self.cur, self.conn, feed_url)
+            else:
+                print "Podcast subscription is new - getting previous podcast"
+                return self.insert_subscription(
+                    channel.getElementsByTagName('title')[0].firstChild.data, feed_url)
+
+    def get_channels(self, feed_url):
+        """Get a list of channels in the feed."""
+        xml_data = open_datasource(feed_url)
+        if not xml_data:
+            error_string = "Not a valid XML file or URL feed!"
+            print error_string
+            sys.exit(1)
+        print "XML data source opened\n"
+
+        channel_data = xml.dom.minidom.parseString(xml_data)
+        channels = channel_data.getElementsByTagName('channel')
+        return channels
+
     def insert_subscription(self, chan, feed):
         chan.replace(' ', '-')
         chan.replace('---','-')
         row = (chan, feed, "NULL")
         self.cur.execute('INSERT INTO subscriptions(channel, feed, last_ep) VALUES (?, ?, ?)', row)
         self.conn.commit()
+        return True
 
-    def iterate_channel(self, chan, today, mode, feed, chan_dir):
+    def _download_channel(self, channel_data, feed):
+        """Download the channel within the feed."""
         global total_items
         global total_size
         NUM_MAX_DOWNLOADS = 4
@@ -153,23 +198,21 @@ class PodCasts(object):
         size = 0
         last_ep = "NULL"
         print "Iterating channel..."
-        if mode == MODE_SUBSCRIBE:
-            print "Feed: " + feed
-            if does_sub_exist(self.cur, self.conn, feed):
-                print "Podcast subscription exists - getting latest podcast"
-                last_ep = get_last_subscription_downloaded(self.cur, self.conn, feed)
-            else:
-                print "Podcast subscription is new - getting previous podcast"
-                self.insert_subscription(
-                        chan.getElementsByTagName('title')[0].firstChild.data, feed)
-        for item in chan.getElementsByTagName('item'):
+        today = datetime.date.today()
+        mode = MODE_DOWNLOAD
+
+        channel_title = channel_data.getElementsByTagName('title')[0].firstChild.data
+        chan_dir = self._get_channel_directory(channel_title)
+
+        for item in channel_data.getElementsByTagName('item'):
             try:
                 item_title = item.getElementsByTagName('title')[0].firstChild.data
                 item_date = item.getElementsByTagName('pubDate')[0].firstChild.data
                 item_file = item.getElementsByTagName('enclosure')[0].getAttribute('url')
                 item_size = item.getElementsByTagName('enclosure')[0].getAttribute('length')
                 item_type = item.getElementsByTagName('enclosure')[0].getAttribute('type')
-                struct_time_today = strptime(today, "%a, %d %b %Y %H:%M:%S")
+                # struct_time_today = strptime(today, "%a, %d %b %Y %H:%M:%S")
+                struct_time_today = today
                 try:
                     struct_time_item = strptime(fix_date(item_date), "%a, %d %b %Y %H:%M:%S")
                     has_error = 0    
@@ -230,6 +273,15 @@ class PodCasts(object):
                 print "This RSS item appears to have no data attribute for the podcast '" + item_title + "'. Skipping..." 
         return str(num) + " podcasts totalling " + str(size) + " bytes"
 
+    def _get_channel_directory(self, channel_title):
+        """Return the directory for the channel.
+
+        Ensure that it exists."""
+        channel_directory  = os.path.join(self.data_dir, channel_title)
+        if not os.path.exists(channel_directory):
+            os.makedirs(channel_directory)
+        return channel_directory
+
     def _iterate_feed(self, data, mode, feed):
         """Work through a PodCast XML feed."""
 
@@ -243,12 +295,10 @@ class PodCasts(object):
                 channel_link = channel.getElementsByTagName('link')[0].firstChild.data
                 print "Channel Title: ===" + channel_title + "==="
                 print "Channel Link: " + channel_link
+
                 channel_title = clean_string(channel_title)
-                channel_directory = \
-                        os.path.join(self.data_dir, channel_title)
-                if not os.path.exists(channel_directory):
-                    os.makedirs(channel_directory)
-                    print "self.current Date: ", today
+                channel_directory = self._get_channel_directory(channel_title)
+
                 if mode == MODE_DOWNLOAD:
                     print "Bulk download. Processing..."
                     num_podcasts = self.iterate_channel(channel, today, 
@@ -275,6 +325,38 @@ class PodCasts(object):
             print "ERROR - Unicoce encoding error in string. Cannot convert to ASCII. Skipping..."
             message += "0 podcasts have been downloaded from this feed due to RSS syntax problems. Please try again later"
         return message
+
+    def update_feed(self, feed_url):
+        """Update all channels in a feed."""
+        channels = self.get_channels(feed_url)
+        for channel in channels:
+            self._download_channel(channel, feed_url)
+        message = "Updated {feed}".format(feed=feed_url)
+        print message
+
+    def update_all(self):
+        """Update all podcast subscriptions."""
+
+        print "Updating all podcast subscriptions..."
+        subs = self.get_subscriptions()
+        for sub in subs:
+            feed_name = sub[0]
+            feed_url = sub[1]
+            feed_name.encode('utf-8')
+            feed_url.encode('utf-8')
+            print "Feed for subscription: '" + feed_name + "' from '" + feed_url + "' is updating..."
+            message = self.update_feed(feed_url)
+            print message
+
+# TODO: Re-enable mail later
+        #        mail += message
+        #mail = mail + "\n\n" + str(total_items) + " podcasts totalling " + str(total_size) + " bytes have been downloaded."
+
+#       if has_mail_users(cursor, connection):
+#            print "Have e-mail address(es) - attempting e-mail..."
+#            mail_updates(cursor, connection, mail, str(total_items))
+
+
 
 
 def main():
@@ -313,18 +395,16 @@ def main():
 
     pc = PodCasts()
 
-    if '--subscribe' in args:
+    if args['--subscribe']:
         feed_url = args['--subscribe']
         
-        data = open_datasource(feed_url)
-        if not data:
-            error_string = "Not a valid XML file or URL feed!"
-            print error_string
-            sys.exit(1)
-        print "XML data source opened\n"
-        mode = MODE_SUBSCRIBE
-        result = pc._iterate_feed(data, mode, feed_url)
+        # mode = MODE_SUBSCRIBE
+        result = pc.subscribe(feed_url)
+        # result = pc._iterate_feed(data, mode, feed_url)
         print result
+
+    if args['--update']:
+        pc.update_all()
 
     if arguments.dl_feed_url:
         feed_url = arguments.dl_feed_url
@@ -377,26 +457,6 @@ def main():
         elif mode == MODE_LIST:
             print "Listing current podcast subscriptions...\n"
             list_subscriptions(cursor, connection)
-        elif mode == MODE_UPDATE:
-            print "Updating all podcast subscriptions..."
-            subs = get_subscriptions(cursor, connection)
-            for sub in subs:
-                feed_name = sub[0]
-                feed_url = sub[1]
-                feed_name.encode('utf-8')
-                feed_url.encode('utf-8')
-                print "Feed for subscription: '" + feed_name + "' from '" + feed_url + "' is updating..."
-                data = open_datasource(feed_url)
-                if not data:
-                    print "'" + feed_url + "' for '" + feed_name.encode("utf-8") + "' is not a valid feed URL!"
-                else:
-                    message = iterate_feed(data, mode, download_directory, todays_date, cursor, connection, feed_url)
-                    print message
-                    mail += message
-            mail = mail + "\n\n" + str(total_items) + " podcasts totalling " + str(total_size) + " bytes have been downloaded."
-            if has_mail_users(cursor, connection):
-                print "Have e-mail address(es) - attempting e-mail..."
-                mail_updates(cursor, connection, mail, str(total_items))
         elif mode == MODE_MAIL_ADD:
             add_mail_user(cursor, connection, mail_address)
             print "E-Mail address: " + mail_address + " has been added"
@@ -414,6 +474,7 @@ def main():
 
 
 def open_datasource(xml_url):
+    print "Opening feed {url}".format(url=xml_url)
     try:
         response = urllib2.urlopen(xml_url)
     except ValueError:
@@ -425,9 +486,9 @@ def open_datasource(xml_url):
         except urllib2.URLError:
             print "ERROR - Connection problems. Please try again later"
             response = False
-        except httplib.IncompleteRead:
-            print "ERROR - Incomplete data read. Please try again later"
-            response = False
+#        except httplib.IncompleteRead:
+#            print "ERROR - Incomplete data read. Please try again later"
+#            response = False
 
     if response != False:
         return response.read()
@@ -667,14 +728,6 @@ def list_subscriptions(cur, conn):
     except sqlite3.OperationalError:
         print "There are no current subscriptions or there was an error"
 
-
-def get_subscriptions(cur, conn):
-    try:
-        cur.execute('SELECT * FROM subscriptions')
-        return cur.fetchall()
-    except sqlite3.OperationalError:
-        print "There are no current subscriptions"
-        return null
 
 
 def update_subscription(cur, conn, feed, date):
