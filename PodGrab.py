@@ -44,6 +44,7 @@ from docopt import docopt
 args = docopt(__doc__, version='1.0')
 print args
 
+import traceback
 import os
 import sys
 import argparse
@@ -82,8 +83,38 @@ total_item = 0
 total_size = 0
 has_error = 0
 
+class RSSItem(object):
+    """ Parse RSS feed item details from the XML"""
+    def __init__(self, item_xml):
+        """ Parse the xml. """
+        self.title =  \
+            item_xml.getElementsByTagName('title')[0].firstChild.data
+        self.date = to_date(
+            item_xml.getElementsByTagName(
+                    'pubDate')[0].firstChild.data)
+        self.filename = item_xml.getElementsByTagName(
+            'enclosure')[0].getAttribute('url')
+        self.size = item_xml.getElementsByTagName(
+            'enclosure')[0].getAttribute('length')
+        self.filetype = item_xml.getElementsByTagName(
+            'enclosure')[0].getAttribute('type')
+    def __str__(self):
+        return """Title: {title}
+                Date: {date} 
+                File: {filename}
+                Type: {filetype}
+                Size: {size} bytes
+            """.format(self.__dict__)
+
 class PodCasts(object):
     """Handle the podcasts."""
+
+    def update_subscription(self, feed, date):
+        """Update last downloaded date for the feed."""
+        row = (date, feed)
+        self.cur.execute('UPDATE subscriptions SET last_ep = ? where feed = ?', row)
+        self.conn.commit()
+        return True
 
     def __del__(self):
         """Cleanup database connection."""
@@ -140,9 +171,9 @@ class PodCasts(object):
 
     def get_subscriptions(self):
         try:
-            self.cur.execute('SELECT * FROM subscriptions')
+            self.cur.execute('SELECT channel, feed, last_ep FROM subscriptions')
             return self.cur.fetchall()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
             print "There are no current subscriptions"
             return [] 
 
@@ -188,7 +219,7 @@ class PodCasts(object):
         self.conn.commit()
         return True
 
-    def _download_channel(self, channel_data, feed):
+    def _update_channel(self, channel_data, feed, last_updated):
         """Download the channel within the feed."""
         global total_items
         global total_size
@@ -199,78 +230,48 @@ class PodCasts(object):
         last_ep = "NULL"
         print "Iterating channel..."
         today = datetime.date.today()
-        mode = MODE_DOWNLOAD
 
         channel_title = channel_data.getElementsByTagName('title')[0].firstChild.data
         chan_dir = self._get_channel_directory(channel_title)
 
-        for item in channel_data.getElementsByTagName('item'):
+        for item_xml in channel_data.getElementsByTagName('item'):
             try:
-                item_title = item.getElementsByTagName('title')[0].firstChild.data
-                item_date = item.getElementsByTagName('pubDate')[0].firstChild.data
-                item_file = item.getElementsByTagName('enclosure')[0].getAttribute('url')
-                item_size = item.getElementsByTagName('enclosure')[0].getAttribute('length')
-                item_type = item.getElementsByTagName('enclosure')[0].getAttribute('type')
-                # struct_time_today = strptime(today, "%a, %d %b %Y %H:%M:%S")
+                item = RSSItem(item_xml)
+
+                print u"Downloading {title}".format(title=item.title)
                 struct_time_today = today
+                saved = 0
+                has_error = 0    
                 try:
-                    struct_time_item = strptime(fix_date(item_date), "%a, %d %b %Y %H:%M:%S")
-                    has_error = 0    
-                except TypeError:
+                    # struct_time_item = strptime(fix_date(item_date), "%a, %d %b %Y %H:%M:%S")
+                    if item.date <= datetime.datetime.today() \
+                            and item.date >= last_updated:
+                        saved = write_podcast(item, chan_dir)
+                    if saved > 0:
+                        print "Downloading:\n {item}".format(item = str(item)) 
+                        num = num + saved
+                        size = size + int(item.size)
+                        total_size += size
+                        total_items += num
+                        self.update_subscription(feed, item.date)
+
+                except TypeError as exc:
+                    print traceback.format_exc()
+                    print "Unable to parse date. Bad type. {date}".format(item_date)
                     has_error = 1
                 except ValueError:
                     has_error = 1
-                if mode == MODE_DOWNLOAD:
-                    if not has_error:
-                        saved = write_podcast(item_file, chan_dir, item_date, item_type)
-                    else:
-                        saved = 0
-                        print "This item has a badly formatted date. Cannot download!"
-                    if saved > 0:
-                        print "\nTitle: " + item_title
-                        print "Date:  " + item_date
-                        print "File:  " + item_file
-                        print "Size:  " + item_size + " bytes"
-                        print "Downloading " + item_file + "..."
-                        num = num + saved
-                    size = size + int(item_size)
-                    total_size += size
-                    total_items += num
-                elif mode == MODE_SUBSCRIBE or mode == MODE_UPDATE:
-                    if (last_ep == "NULL"):
-                        last_ep = fix_date(item_date)
-                        update_subscription(self.cur, self.conn, feed, last_ep)
-                    try:
-                        struct_last_ep = strptime(last_ep, "%a, %d %b %Y %H:%M:%S")
-                        has_error = 0
-                    except TypeError:
-                        has_error = 1
-                        print "This item has a badly formatted date. Cannot download!"
-                    except ValueError:
-                        has_error = 1
-                        print "This item has a badly formatted date. Cannot download!"
-                    if not has_error:
-                        if mktime(struct_time_item) <= mktime(struct_time_today) and mktime(struct_time_item) >= mktime(struct_last_ep):
-                            saved = write_podcast(item_file, chan_dir, item_date, item_type)
-                            if saved > 0:
-                                print "\nTitle: " + item_title
-                                print "Date:  " + item_date
-                                print "File:  " + item_file
-                                print "Size:  " + item_size + " bytes"
-                                print "Type:  " + item_type
-                                update_subscription(self.cur, self.conn, feed, fix_date(item_date))
-                                num = num + saved
-                                size = size + int(item_size)
-                                total_size += size
-                                total_items += num
-                            if (num >= NUM_MAX_DOWNLOADS):
-                                print "Maximum session download of " + str(NUM_MAX_DOWNLOADS) + " podcasts has been reached. Exiting."
-                                break
+                    print "Unable to parse date. Bad value. {date}".format(item_date)
+
+                if (num >= NUM_MAX_DOWNLOADS):
+                    print "Maximum session download of " + str(NUM_MAX_DOWNLOADS) + " podcasts has been reached. Exiting."
+                    break
+
             except IndexError, e:
                 #traceback.print_exc()
                 print "This RSS item has no downloadable URL link for the podcast for '" + item_title  + "'. Skipping..."
-            except AttributeError, e:
-                print "This RSS item appears to have no data attribute for the podcast '" + item_title + "'. Skipping..." 
+            # except AttributeError as exc:
+            #    print "This RSS item appears to have no data attribute for the podcast '" + item_title + "'. Skipping..." 
         return str(num) + " podcasts totalling " + str(size) + " bytes"
 
     def _get_channel_directory(self, channel_title):
@@ -326,11 +327,11 @@ class PodCasts(object):
             message += "0 podcasts have been downloaded from this feed due to RSS syntax problems. Please try again later"
         return message
 
-    def update_feed(self, feed_url):
+    def update_feed(self, feed_url, last_updated):
         """Update all channels in a feed."""
         channels = self.get_channels(feed_url)
         for channel in channels:
-            self._download_channel(channel, feed_url)
+            self._update_channel(channel, feed_url, last_updated)
         message = "Updated {feed}".format(feed=feed_url)
         print message
 
@@ -344,8 +345,16 @@ class PodCasts(object):
             feed_url = sub[1]
             feed_name.encode('utf-8')
             feed_url.encode('utf-8')
-            print "Feed for subscription: '" + feed_name + "' from '" + feed_url + "' is updating..."
-            message = self.update_feed(feed_url)
+
+            feed_last_updated = datetime.datetime.today() - \
+                datetime.timedelta(days=7)
+
+            if sub[2] != 'NULL':
+                feed_last_updated = to_date(sub[2])
+
+            print "Feed for subscription: '" + feed_name + \
+                    "' from '" + feed_url + "' is updating..."
+            message = self.update_feed(feed_url, feed_last_updated)
             print message
 
 # TODO: Re-enable mail later
@@ -355,9 +364,6 @@ class PodCasts(object):
 #       if has_mail_users(cursor, connection):
 #            print "Have e-mail address(es) - attempting e-mail..."
 #            mail_updates(cursor, connection, mail, str(total_items))
-
-
-
 
 def main():
     mode = MODE_NONE
@@ -472,6 +478,8 @@ def main():
     else:
         print "Sorry, there was some sort of error: '" + error_string + "'\nExiting...\n"
 
+def to_date(date_string):
+    return datetime.datetime.strptime(fix_date(date_string), "%a, %d %b %Y %H:%M:%S")
 
 def open_datasource(xml_url):
     print "Opening feed {url}".format(url=xml_url)
@@ -572,50 +580,53 @@ def clean_string(str):
     new_string_final = new_string_final.replace('--','-')
     return new_string_final
 
-def write_podcast(item, chan_loc, date, type):
-    (item_path, item_file_name) = os.path.split(item)
-    if len(item_file_name) > 50:
-        item_file_name = item_file_name[:50]
+def write_podcast(rss_item, chan_loc):
+    (rss_item_path, rss_item_file_name) = os.path.split(rss_item.filename)
+
+    if len(rss_item_file_name) > 50:
+        rss_item_file_name = rss_item_file_name[:50]
     today = datetime.date.today()
-    item_file_name = today.strftime("%Y/%m/%d") + item_file_name
-    local_file = chan_loc + os.sep + clean_string(item_file_name)
-    if type == "video/quicktime" or type == "audio/mp4" or type == "video/mp4":
+    rss_item_file_name = today.strftime("%Y/%m/%d") + rss_item_file_name
+    local_file = chan_loc + os.sep + clean_string(rss_item_file_name)
+    if rss_item.filetype == "video/quicktime" or rss_item.filetype == "audio/mp4" or rss_item.filetype == "video/mp4":
         if not local_file.endswith(".mp4"):
             local_file = local_file + ".mp4"
-    elif type == "video/mpeg":
+    elif rss_item.filetype == "video/mpeg":
                 if not local_file.endswith(".mpg"):
                         local_file = local_file + ".mpg"
-    elif type == "video/x-flv":
+    elif rss_item.filetype == "video/x-flv":
         if not local_file.endswith(".flv"):
             local_file = local_file + ".flv"
-    elif type == "video/x-ms-wmv":
+    elif rss_item.filetype == "video/x-ms-wmv":
         if not local_file.endswith(".wmv"):
                         local_file = local_file + ".wmv"
-    elif type == "video/webm" or type == "audio/webm":
+    elif rss_item.filetype == "video/webm" or rss_item.filetype == "audio/webm":
         if not local_file.endswith(".webm"):
             local_file = local_file + ".webm"
-    elif type == "audio/mpeg":
+    elif rss_item.filetype == "audio/mpeg":
                 if not local_file.endswith(".mp3"):
                         local_file = local_file + ".mp3"
-    elif type == "audio/ogg" or type == "video/ogg" or type == "audio/vorbis":
+    elif rss_item.filetype == "audio/ogg" or rss_item.filetype == "video/ogg" or rss_item.filetype == "audio/vorbis":
                 if not local_file.endswith(".ogg"):
                         local_file = local_file + ".ogg"
-    elif type == "audio/x-ms-wma" or type == "audio/x-ms-wax":
+    elif rss_item.filetype == "audio/x-ms-wma" or rss_item.filetype == "audio/x-ms-wax":
         if not local_file.endswith(".wma"):
                         local_file = local_file + ".wma"    
     if os.path.exists(local_file):
         return 0
     else:
-        print "\nDownloading " + item_file_name + " which was published on " + date
+        print "\nDownloading {filename} which was published on {date}".format(
+            filename = rss_item_file_name,
+            date = rss_item.date)
         try:
-            item_file = urllib2.urlopen(item)
+            rss_item_file = urllib2.urlopen(rss_item)
             output = open(local_file, 'wb')
-            output.write(item_file.read())
+            output.write(rss_item_file.read())
             output.close()
-            print "Podcast: ", item, " downloaded to: ", local_file
+            print "Podcast: ", rss_item, " downloaded to: ", local_file
             return 1
         except urllib2.URLError as e:
-            print "ERROR - Could not write item to file: ", e
+            print "ERROR - Could not write rss_item to file: ", e
         except socket.error as e:
             print "ERROR - Socket reset by peer: ", e
 
@@ -687,7 +698,6 @@ def fix_date(date):
         new_date = new_date + split_array[i] + " "
     return new_date.rstrip()
 
-
 def does_sub_exist(cur, conn, feed):
     row = (feed,)
     cur.execute('SELECT COUNT (*) FROM subscriptions WHERE feed = ?', row)
@@ -727,14 +737,6 @@ def list_subscriptions(cur, conn):
         print str(count) + " subscriptions present"
     except sqlite3.OperationalError:
         print "There are no current subscriptions or there was an error"
-
-
-
-def update_subscription(cur, conn, feed, date):
-    row = (date, feed)
-    cur.execute('UPDATE subscriptions SET last_ep = ? where feed = ?', row)
-    conn.commit()
-
 
 def get_last_subscription_downloaded(cur, conn, feed):
     row = (feed,)
