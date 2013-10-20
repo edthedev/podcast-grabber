@@ -276,6 +276,7 @@ class PodCasts(object):
         """Return the directory for the channel.
 
         Ensure that it exists."""
+        channel_title = channel_title.replace(' ', '-').replace(':', '')
         channel_directory  = os.path.join(self.data_dir, channel_title)
         if not os.path.exists(channel_directory):
             os.makedirs(channel_directory)
@@ -604,7 +605,7 @@ def write_podcast(rss_item, chan_loc):
         rss_item_file_name = rss_item_file_name[:50]
     today = datetime.date.today()
     rss_item_file_name = today.strftime("%Y/%m/%d") + rss_item_file_name
-    local_file = chan_loc + os.sep + clean_string(rss_item_file_name)
+    local_file = os.path.join(chan_loc, clean_string(rss_item_file_name))
     if rss_item.filetype == "video/quicktime" or rss_item.filetype == "audio/mp4" or rss_item.filetype == "video/mp4":
         if not local_file.endswith(".mp4"):
             local_file = local_file + ".mp4"
@@ -630,18 +631,23 @@ def write_podcast(rss_item, chan_loc):
         if not local_file.endswith(".wma"):
                         local_file = local_file + ".wma"    
     if os.path.exists(local_file):
-        return 0
+        print "\nPodcast already downloaded: {podcast} as {filename}".format(
+            podcast = str(rss_item),
+            filename = rss_item_file_name,)
+        return False
     else:
-        print "\nDownloading {filename} which was published on {date}".format(
+        print "\nDownloading {podcast} to {filename}".format(
+            podcast = str(rss_item),
             filename = rss_item_file_name,
-            date = rss_item.date)
+            )
         try:
             rss_item_file = urllib2.urlopen(rss_item.url)
             output = open(local_file, 'wb')
             output.write(rss_item_file.read())
             output.close()
-            print "Podcast: ", rss_item, " downloaded to: ", local_file
-            return 1
+            print "Finished downloading {filename}".format(filename =
+                    rss_item_file_name)
+            return True
         except urllib2.URLError as e:
             print "ERROR - Could not write rss_item to file: ", e
         except socket.error as e:
