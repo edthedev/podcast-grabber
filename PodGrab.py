@@ -92,7 +92,7 @@ class RSSItem(object):
         self.date = to_date(
             item_xml.getElementsByTagName(
                     'pubDate')[0].firstChild.data)
-        self.filename = item_xml.getElementsByTagName(
+        self.url = item_xml.getElementsByTagName(
             'enclosure')[0].getAttribute('url')
         self.size = item_xml.getElementsByTagName(
             'enclosure')[0].getAttribute('length')
@@ -101,10 +101,10 @@ class RSSItem(object):
     def __str__(self):
         return """Title: {title}
                 Date: {date} 
-                File: {filename}
+                File URL: {url}
                 Type: {filetype}
                 Size: {size} bytes
-            """.format(self.__dict__)
+            """.format(**self.__dict__)
 
 class PodCasts(object):
     """Handle the podcasts."""
@@ -126,10 +126,10 @@ class PodCasts(object):
 
         self.data_dir = os.path.expanduser('~/podcasts')
 
-        print "Default encoding: " + sys.getdefaultencoding()
+        # print "Default encoding: " + sys.getdefaultencoding()
         # current_directory = os.path.realpath(os.path.dirname(sys.argv[0]))
         self.current_directory = os.path.expanduser('~/')
-        print "Current Directory: ", self.current_directory
+        # print "Current Directory: ", self.current_directory
 
         self.conn = None
 
@@ -205,7 +205,7 @@ class PodCasts(object):
             error_string = "Not a valid XML file or URL feed!"
             print error_string
             sys.exit(1)
-        print "XML data source opened\n"
+        # print "XML data source opened\n"
 
         channel_data = xml.dom.minidom.parseString(xml_data)
         channels = channel_data.getElementsByTagName('channel')
@@ -228,24 +228,22 @@ class PodCasts(object):
         num = 0
         size = 0
         last_ep = "NULL"
-        print "Iterating channel..."
         today = datetime.date.today()
 
         channel_title = channel_data.getElementsByTagName('title')[0].firstChild.data
+        print u"Checking {title} for updates.".format(title=channel_title)
         chan_dir = self._get_channel_directory(channel_title)
 
         for item_xml in channel_data.getElementsByTagName('item'):
             try:
                 item = RSSItem(item_xml)
-
-                print u"Downloading {title}".format(title=item.title)
                 struct_time_today = today
                 saved = 0
                 has_error = 0    
                 try:
-                    # struct_time_item = strptime(fix_date(item_date), "%a, %d %b %Y %H:%M:%S")
                     if item.date <= datetime.datetime.today() \
                             and item.date >= last_updated:
+                        print u"Downloading {title}".format(title=item.title)
                         saved = write_podcast(item, chan_dir)
                     if saved > 0:
                         print "Downloading:\n {item}".format(item = str(item)) 
@@ -327,19 +325,26 @@ class PodCasts(object):
             message += "0 podcasts have been downloaded from this feed due to RSS syntax problems. Please try again later"
         return message
 
-    def update_feed(self, feed_url, last_updated):
+    def update_feed(self, feed_name, feed_url, last_updated):
         """Update all channels in a feed."""
+
+        print "Updating feed {name}...".format(name=feed_name)
+        # print "Feed for subscription: '" + feed_name + \
+        #        "' from '" + feed_url + "' is updating..."
+
         channels = self.get_channels(feed_url)
         for channel in channels:
             self._update_channel(channel, feed_url, last_updated)
-        message = "Updated {feed}".format(feed=feed_url)
-        print message
+        print "Finished updating feed {name}".format(name=feed_name)
 
     def update_all(self):
         """Update all podcast subscriptions."""
 
         print "Updating all podcast subscriptions..."
         subs = self.get_subscriptions()
+        if len(subs) == 0:
+            print "No subscriptions."
+
         for sub in subs:
             feed_name = sub[0]
             feed_url = sub[1]
@@ -352,9 +357,7 @@ class PodCasts(object):
             if sub[2] != 'NULL':
                 feed_last_updated = to_date(sub[2])
 
-            print "Feed for subscription: '" + feed_name + \
-                    "' from '" + feed_url + "' is updating..."
-            message = self.update_feed(feed_url, feed_last_updated)
+            message = self.update_feed(feed_name, feed_url, feed_last_updated)
             print message
 
 # TODO: Re-enable mail later
@@ -479,7 +482,21 @@ def main():
         print "Sorry, there was some sort of error: '" + error_string + "'\nExiting...\n"
 
 def to_date(date_string):
-    return datetime.datetime.strptime(fix_date(date_string), "%a, %d %b %Y %H:%M:%S")
+    formats = [
+        "%a, %d %b %Y %H:%M:%S",
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%a, %d %b %Y %H:%M:%S -0400",
+        "%Y-%m-%d %H:%M:%S",
+            ]
+    for form in formats:
+        try:
+            return datetime.datetime.strptime(date_string, form)
+        except:
+            # print "Date {date} did not match {form}.".format(
+              #      date=date_string, form=form)
+            pass
+
+    raise Exception("Unrecognized date: {date}".format(date=date_string))
 
 def open_datasource(xml_url):
     print "Opening feed {url}".format(url=xml_url)
@@ -581,7 +598,7 @@ def clean_string(str):
     return new_string_final
 
 def write_podcast(rss_item, chan_loc):
-    (rss_item_path, rss_item_file_name) = os.path.split(rss_item.filename)
+    (rss_item_path, rss_item_file_name) = os.path.split(rss_item.url)
 
     if len(rss_item_file_name) > 50:
         rss_item_file_name = rss_item_file_name[:50]
@@ -619,7 +636,7 @@ def write_podcast(rss_item, chan_loc):
             filename = rss_item_file_name,
             date = rss_item.date)
         try:
-            rss_item_file = urllib2.urlopen(rss_item)
+            rss_item_file = urllib2.urlopen(rss_item.url)
             output = open(local_file, 'wb')
             output.write(rss_item_file.read())
             output.close()
