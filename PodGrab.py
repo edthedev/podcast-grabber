@@ -2,6 +2,7 @@
 """A command line Podcast downloader for RSS XML feeds.
 
 Usage:
+    PodGrab.py --list
     PodGrab.py --subscribe <feed_url>
     PodGrab.py --update
     PodGrab.py --help
@@ -12,6 +13,7 @@ Options:
     -e --export=<OPML_EXPORT>           Export subscriptions to OPML file
     -i --import=<opml_import>           Import subscriptions from OPML file
     -r --remove=<feed_url>              Remove from the Podcast feed
+    -l --list                           List subscriptions.
     -s --subscribe=<feed_url>           Subscribe to the XML feed 
                                             and download latest podcast
     -u --update                         Updates all current subscriptions
@@ -82,6 +84,32 @@ DOWNLOAD_DIRECTORY = "podcasts"
 total_item = 0
 total_size = 0
 has_error = 0
+
+class RSSSubscription(object):
+    """ Details of an RSS Subscription from our database."""
+    def __init__(self):
+        self.name = None
+        self.url = None
+        self.last_ep = None
+        self.last_updated = None
+
+    @staticmethod
+    def create_from_row(sub):
+        rss_sub = RSSSubscription()
+        rss_sub.name = sub[0]
+        rss_sub.url = sub[1]
+        rss_sub.name.encode('utf-8')
+        rss_sub.url.encode('utf-8')
+
+        if sub[2] != 'NULL':
+            rss_sub.last_ep = to_date(sub[2])
+
+        return rss_sub
+
+    def __str__(self):
+        return """Subscribed to {name}
+            URL: {url}
+            Last Episode: {last_ep}""".format(**self.__dict__)
 
 class RSSItem(object):
     """ Parse RSS feed item details from the XML"""
@@ -167,12 +195,15 @@ class PodCasts(object):
                 print error_string
                 sys.exit(1)
         else:
-            print "Download directory exists: '" + self.data_dir + "'" 
+            # print "Download directory exists: '" + self.data_dir + "'" 
+            pass
 
     def get_subscriptions(self):
         try:
             self.cur.execute('SELECT channel, feed, last_ep FROM subscriptions')
-            return self.cur.fetchall()
+            records = self.cur.fetchall()
+            subs = [RSSSubscription.create_from_row(row) for row in records]
+            return subs
         except sqlite3.OperationalError as exc:
             print "There are no current subscriptions"
             return [] 
@@ -326,8 +357,11 @@ class PodCasts(object):
             message += "0 podcasts have been downloaded from this feed due to RSS syntax problems. Please try again later"
         return message
 
-    def update_feed(self, feed_name, feed_url, last_updated):
+    def update_subscription(self, rss_sub):
         """Update all channels in a feed."""
+        feed_name = rss_sub.name
+        feed_url = rss_sub.url
+        last_updated = rss_sub.last_ep
 
         print "Updating feed {name}...".format(name=feed_name)
         # print "Feed for subscription: '" + feed_name + \
@@ -355,10 +389,8 @@ class PodCasts(object):
             feed_last_updated = datetime.datetime.today() - \
                 datetime.timedelta(days=7)
 
-            if sub[2] != 'NULL':
-                feed_last_updated = to_date(sub[2])
 
-            message = self.update_feed(feed_name, feed_url, feed_last_updated)
+            message = self.update_subscription(rss_sub)
             print message
 
 # TODO: Re-enable mail later
@@ -384,26 +416,31 @@ def main():
     total_items = 0
     total_size = 0
     data = ""
-
-    parser = argparse.ArgumentParser(description='A command line Podcast downloader for RSS XML feeds')
-    parser.add_argument('-s', '--subscribe', action="store", dest="sub_feed_url", help='Subscribe to the following XML feed and download latest podcast')
-    parser.add_argument('-d', '--download', action="store", dest="dl_feed_url", help='Bulk download all podcasts in the following XML feed or file')
-    parser.add_argument('-un', '--unsubscribe', action="store", dest="unsub_url", help='Unsubscribe from the following Podcast feed')
-    parser.add_argument('-ma', '--mail-add', action="store", dest="mail_address_add", help='Add a mail address to mail subscription updates to')
-    parser.add_argument('-md', '--mail-delete', action="store", dest="mail_address_delete", help='Delete a mail address')
-
-    parser.add_argument('-l', '--list', action="store_const", const="ALL", dest="list_subs", help='Lists current Podcast subscriptions')
-    parser.add_argument('-u', '--update', action="store_const", const="UPDATE", dest="update_subs", help='Updates all current Podcast subscriptions')
-    parser.add_argument('-ml', '--mail-list', action="store_const", const="MAIL", dest="list_mail", help='Lists all current mail addresses')
-
-    parser.add_argument('-io', '--import', action="store", dest="opml_import", help='Import subscriptions from OPML file')
-    parser.add_argument('-eo', '--export', action="store_const", const="OPML_EXPORT", dest="opml_export", help='Export subscriptions to OPML file')
-    
-    arguments = parser.parse_args()
+#
+#    parser = argparse.ArgumentParser(description='A command line Podcast downloader for RSS XML feeds')
+#    parser.add_argument('-s', '--subscribe', action="store", dest="sub_feed_url", help='Subscribe to the following XML feed and download latest podcast')
+#    parser.add_argument('-d', '--download', action="store", dest="dl_feed_url", help='Bulk download all podcasts in the following XML feed or file')
+#    parser.add_argument('-un', '--unsubscribe', action="store", dest="unsub_url", help='Unsubscribe from the following Podcast feed')
+#    parser.add_argument('-ma', '--mail-add', action="store", dest="mail_address_add", help='Add a mail address to mail subscription updates to')
+#    parser.add_argument('-md', '--mail-delete', action="store", dest="mail_address_delete", help='Delete a mail address')
+#
+#    parser.add_argument('-u', '--update', action="store_const", const="UPDATE", dest="update_subs", help='Updates all current Podcast subscriptions')
+#    parser.add_argument('-ml', '--mail-list', action="store_const", const="MAIL", dest="list_mail", help='Lists all current mail addresses')
+#
+#    parser.add_argument('-io', '--import', action="store", dest="opml_import", help='Import subscriptions from OPML file')
+#    parser.add_argument('-eo', '--export', action="store_const", const="OPML_EXPORT", dest="opml_export", help='Export subscriptions to OPML file')
+#    
+#    arguments = parser.parse_args()
 
     todays_date = strftime("%a, %d %b %Y %H:%M:%S", gmtime())
 
     pc = PodCasts()
+
+    if args['--list']:
+        print "Listing current podcast subscriptions...\n"
+        subs = pc.get_subscriptions()
+        for sub in subs:
+            print sub
 
     if args['--subscribe']:
         feed_url = args['--subscribe']
@@ -416,72 +453,68 @@ def main():
     if args['--update']:
         pc.update_all()
 
-    if arguments.dl_feed_url:
-        feed_url = arguments.dl_feed_url
-        data = open_datasource(feed_url)
-        if not data:
-            error_string = "Not a valid XML file or URL feed!"
-            has_error = 1 
-        else:
-            print "XML data source opened\n"
-            mode = MODE_DOWNLOAD
-    elif arguments.unsub_url:
-        feed_url = arguments.unsub_url
-        mode = MODE_UNSUBSCRIBE
-    elif arguments.list_subs:
-        mode = MODE_LIST
-    elif arguments.update_subs:
-        mode = MODE_UPDATE
-    elif arguments.mail_address_add:
-        mail_address = arguments.mail_address_add
-        mode = MODE_MAIL_ADD
-    elif arguments.mail_address_delete:
-        mail_address = arguments.mail_address_delete
-        mode = MODE_MAIL_DELETE
-    elif arguments.list_mail:
-        mode = MODE_MAIL_LIST
-    elif arguments.opml_import:
-        import_file_name = arguments.opml_import
-        mode = MODE_IMPORT
-    elif arguments.opml_export:
-        mode = MODE_EXPORT
-    else:
-        error_string = "No Arguments supplied - for usage run 'PodGrab.py -h'"
-        has_error = 1
-
-    if not has_error:
-        if mode == MODE_UNSUBSCRIBE:
-            feed_name = get_name_from_feed(cursor, connection, feed_url)
-            if feed_name == "None":
-                print "Feed does not exist in the database! Skipping..."
-            else:
-                feed_name = clean_string(feed_name)
-                channel_directory = download_directory + os.sep + feed_name
-                print "Deleting '" + channel_directory + "'..."
-                delete_subscription(cursor, connection, feed_url)
-                try :
-                    shutil.rmtree(channel_directory)
-                except OSError:
-                    print "Subscription directory has not been found - it might have been manually deleted" 
-                print "Subscription '" + feed_name + "' removed"
-        elif mode == MODE_LIST:
-            print "Listing current podcast subscriptions...\n"
-            list_subscriptions(cursor, connection)
-        elif mode == MODE_MAIL_ADD:
-            add_mail_user(cursor, connection, mail_address)
-            print "E-Mail address: " + mail_address + " has been added"
-        elif mode == MODE_MAIL_DELETE:
-            delete_mail_user(cursor, connection, mail_address)
-            print "E-Mail address: " + mailAddress + " has been deleted"
-        elif mode == MODE_MAIL_LIST:
-            list_mail_addresses(cursor, connection)
-        elif mode == MODE_EXPORT:
-            export_opml_file(cursor, connection, current_directory)
-        elif mode == MODE_IMPORT:
-            import_opml_file(cursor, connection, current_directory, download_directory, import_file_name)
-    else:
-        print "Sorry, there was some sort of error: '" + error_string + "'\nExiting...\n"
-
+#    if arguments.dl_feed_url:
+#        feed_url = arguments.dl_feed_url
+#        data = open_datasource(feed_url)
+#        if not data:
+#            error_string = "Not a valid XML file or URL feed!"
+#            has_error = 1 
+#        else:
+#            print "XML data source opened\n"
+#            mode = MODE_DOWNLOAD
+#    elif arguments.unsub_url:
+#        feed_url = arguments.unsub_url
+#        mode = MODE_UNSUBSCRIBE
+#    elif arguments.update_subs:
+#        mode = MODE_UPDATE
+#    elif arguments.mail_address_add:
+#        mail_address = arguments.mail_address_add
+#        mode = MODE_MAIL_ADD
+#    elif arguments.mail_address_delete:
+#        mail_address = arguments.mail_address_delete
+#        mode = MODE_MAIL_DELETE
+#    elif arguments.list_mail:
+#        mode = MODE_MAIL_LIST
+#    elif arguments.opml_import:
+#        import_file_name = arguments.opml_import
+#        mode = MODE_IMPORT
+#    elif arguments.opml_export:
+#        mode = MODE_EXPORT
+#    else:
+#        error_string = "No Arguments supplied - for usage run 'PodGrab.py -h'"
+#        has_error = 1
+#
+#    if not has_error:
+#        if mode == MODE_UNSUBSCRIBE:
+#            feed_name = get_name_from_feed(cursor, connection, feed_url)
+#            if feed_name == "None":
+#                print "Feed does not exist in the database! Skipping..."
+#            else:
+#                feed_name = clean_string(feed_name)
+#                channel_directory = download_directory + os.sep + feed_name
+#                print "Deleting '" + channel_directory + "'..."
+#                delete_subscription(cursor, connection, feed_url)
+#                try :
+#                    shutil.rmtree(channel_directory)
+#                except OSError:
+#                    print "Subscription directory has not been found - it might have been manually deleted" 
+#                print "Subscription '" + feed_name + "' removed"
+#        elif mode == MODE_MAIL_ADD:
+#            add_mail_user(cursor, connection, mail_address)
+#            print "E-Mail address: " + mail_address + " has been added"
+#        elif mode == MODE_MAIL_DELETE:
+#            delete_mail_user(cursor, connection, mail_address)
+#            print "E-Mail address: " + mailAddress + " has been deleted"
+#        elif mode == MODE_MAIL_LIST:
+#            list_mail_addresses(cursor, connection)
+#        elif mode == MODE_EXPORT:
+#            export_opml_file(cursor, connection, current_directory)
+#        elif mode == MODE_IMPORT:
+#            import_opml_file(cursor, connection, current_directory, download_directory, import_file_name)
+#    else:
+#        # print "Sorry, there was some sort of error: '" + error_string + "'\nExiting...\n"
+#        pass
+#
 def to_date(date_string):
     formats = [
         "%a, %d %b %Y %H:%M:%S",
