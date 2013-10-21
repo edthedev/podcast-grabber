@@ -204,8 +204,8 @@ class PodCasts(object):
             records = self.cur.fetchall()
             subs = [RSSSubscription.create_from_row(row) for row in records]
             return subs
-        except sqlite3.OperationalError as exc:
-            print "There are no current subscriptions"
+        except sqlite3.OperationalError, exc:
+            print "There are no current subscriptions."
             return [] 
 
     def subscribe(self, feed_url):
@@ -250,7 +250,7 @@ class PodCasts(object):
         self.conn.commit()
         return True
 
-    def _update_channel(self, channel_data, feed, last_updated):
+    def _update_channel(self, rss_sub, channel_data, feed, last_updated):
         """Download the channel within the feed."""
         global total_items
         global total_size
@@ -266,45 +266,39 @@ class PodCasts(object):
         chan_dir = self._get_channel_directory(channel_title)
 
         for item_xml in channel_data.getElementsByTagName('item'):
+            item = RSSItem(item_xml)
+            struct_time_today = today
+            saved = 0
+            has_error = 0    
             try:
-                item = RSSItem(item_xml)
-                struct_time_today = today
-                saved = 0
-                has_error = 0    
-                try:
-                    if item.date <= datetime.datetime.today() \
-                            and item.date >= last_updated:
-                        print u"Downloading {title}".format(title=item.title)
-                        saved = write_podcast(item, chan_dir)
-                    if saved > 0:
-                        print "Downloading:\n {item}".format(item = str(item)) 
-                        num = num + saved
-                        size = size + int(item.size)
-                        total_size += size
-                        total_items += num
+                if item.date <= datetime.datetime.today() \
+                        and item.date >= last_updated:
+                    print u"Downloading {title}".format(title=item.title)
+                    saved = write_podcast(item, chan_dir)
+                if saved > 0:
+                    print "Downloading:\n {item}".format(item = str(item)) 
+                    num = num + saved
+                    size = size + int(item.size)
+                    total_size += size
+                    total_items += num
 
-                        rss_sub = RSSSubscription()
-                        rss_sub.name = channel
-                        rss_sub.url = feed_url
-                        rss_sub.last_ep = last_updated
+                    self.update_subscription(rss_sub)
 
-                        self.update_subscription(feed, item.date)
+            except TypeError as exc:
+                print traceback.format_exc()
+                print "Unable to parse date. Bad type. {date}".format(item_date)
+                has_error = 1
+            except ValueError:
+                has_error = 1
+                print "Unable to parse date. Bad value. {date}".format(item_date)
 
-                except TypeError as exc:
-                    print traceback.format_exc()
-                    print "Unable to parse date. Bad type. {date}".format(item_date)
-                    has_error = 1
-                except ValueError:
-                    has_error = 1
-                    print "Unable to parse date. Bad value. {date}".format(item_date)
+            if (num >= NUM_MAX_DOWNLOADS):
+                print "Maximum session download of " + str(NUM_MAX_DOWNLOADS) + " podcasts has been reached. Exiting."
+                break
 
-                if (num >= NUM_MAX_DOWNLOADS):
-                    print "Maximum session download of " + str(NUM_MAX_DOWNLOADS) + " podcasts has been reached. Exiting."
-                    break
-
-            except IndexError, e:
+            #except IndexError, e:
                 #traceback.print_exc()
-                print "This RSS item has no downloadable URL link for the podcast for '" + item_title  + "'. Skipping..."
+            #    print "This RSS item has no downloadable URL link for the podcast for '" + item_title  + "'. Skipping..."
             # except AttributeError as exc:
             #    print "This RSS item appears to have no data attribute for the podcast '" + item_title + "'. Skipping..." 
         return str(num) + " podcasts totalling " + str(size) + " bytes"
@@ -375,7 +369,7 @@ class PodCasts(object):
 
         channels = self.get_channels(feed_url)
         for channel in channels:
-            self._update_channel(channel, feed_url, last_updated)
+            self._update_channel(rss_sub, channel, feed_url, last_updated)
         print "Finished updating feed {name}".format(name=feed_name)
 
     def update_all(self):
@@ -520,6 +514,7 @@ def to_date(date_string):
         "%a, %d %b %Y %H:%M:%S",
         "%a, %d %b %Y %H:%M:%S %z",
         "%a, %d %b %Y %H:%M:%S -0400",
+        "%a, %d %b %Y %H:%M:%S +0000",
         "%Y-%m-%d %H:%M:%S",
             ]
     for form in formats:
