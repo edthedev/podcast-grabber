@@ -282,6 +282,12 @@ class PodCasts(object):
                         size = size + int(item.size)
                         total_size += size
                         total_items += num
+
+                        rss_sub = RSSSubscription()
+                        rss_sub.name = channel
+                        rss_sub.url = feed_url
+                        rss_sub.last_ep = last_updated
+
                         self.update_subscription(feed, item.date)
 
                 except TypeError as exc:
@@ -380,16 +386,10 @@ class PodCasts(object):
         if len(subs) == 0:
             print "No subscriptions."
 
-        for sub in subs:
-            feed_name = sub[0]
-            feed_url = sub[1]
-            feed_name.encode('utf-8')
-            feed_url.encode('utf-8')
-
-            feed_last_updated = datetime.datetime.today() - \
+        for rss_sub in subs:
+            # Temporary hack:
+            rss_sub.last_ep = datetime.datetime.today() - \
                 datetime.timedelta(days=7)
-
-
             message = self.update_subscription(rss_sub)
             print message
 
